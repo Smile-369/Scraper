@@ -9,7 +9,7 @@ credentials = pika.PlainCredentials('rabbituser', 'rabbit1234')
 
 # Async function to consume emails
 async def consume_emails():
-    connection = pika.BlockingConnection(pika.ConnectionParameters('10.2.202.116', 5672, '/', credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters('<IP>', 5672, '/', credentials))
     channel = connection.channel()
 
     # Declare exchanges
@@ -44,7 +44,7 @@ async def consume_emails():
 
 # Async function for URL scraping and distribution
 async def distribute_urls():
-    connection = pika.BlockingConnection(pika.ConnectionParameters('10.2.202.116', 5672, '/', credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters('<IP>', 5672, '/', credentials))
     channel = connection.channel()
     try:
         channel.exchange_delete(exchange='urls_exchange')
@@ -58,7 +58,7 @@ async def distribute_urls():
     channel.exchange_declare(exchange='urls_exchange', exchange_type='fanout')  
     url_regex = r'href="https?://(?:www\.)?dlsu\.edu\.ph(?:/[^".]*(?:/|(?=$)))?"'
 
-    base_url = "https://www.dlsu.edu.ph"
+    base_url = "BASE_URL"
     visited = set()
     not_visited = [base_url]
 
