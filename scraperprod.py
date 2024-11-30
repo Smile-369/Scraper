@@ -4,12 +4,14 @@ import re
 import requests
 import csv
 import aiofiles
+import argparse
 
 credentials = pika.PlainCredentials('rabbituser', 'rabbit1234')
-
+visited = set()
+scraped_emails = set()
 # Async function to consume emails
 async def consume_emails():
-    connection = pika.BlockingConnection(pika.ConnectionParameters('<IP>', 5672, '/', credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters('10.2.202.116', 5672, '/', credentials))
     channel = connection.channel()
 
     # Declare exchanges
@@ -22,6 +24,7 @@ async def consume_emails():
 
     def email_callback(channel, method, properties, body):
         email = body.decode()
+        scraped_emails.add(email)
         print(f" [x] Received {email}")
 
         # Create a task to run the async file writing operation
@@ -38,28 +41,25 @@ async def consume_emails():
     print(' [*] Waiting for emails. To exit press CTRL+C')
     
     # Keep the consumer running
-    while True:
-        connection.process_data_events(time_limit=1) 
-        await asyncio.sleep(1) 
+    try:
+        while True:
+            connection.process_data_events(time_limit=1) 
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        print("consume_emails task cancelled")
+        # Perform any necessary cleanup here, like closing the RabbitMQ connection
+        channel.close()
+        connection.close()
 
 # Async function for URL scraping and distribution
-async def distribute_urls():
-    connection = pika.BlockingConnection(pika.ConnectionParameters('<IP>', 5672, '/', credentials))
+async def distribute_urls(base_url):
+    connection = pika.BlockingConnection(pika.ConnectionParameters('10.2.202.116', 5672, '/', credentials))
     channel = connection.channel()
-    try:
-        channel.exchange_delete(exchange='urls_exchange')
-    except pika.exceptions.ChannelClosedByBroker as e:
-        if e.args[0] == 404:  # Exchange not found, ignore error
-            pass
-        else:
-            raise e
-
     # Use a fanout exchange
     channel.exchange_declare(exchange='urls_exchange', exchange_type='fanout')  
     url_regex = r'href="https?://(?:www\.)?dlsu\.edu\.ph(?:/[^".]*(?:/|(?=$)))?"'
 
-    base_url = "BASE_URL"
-    visited = set()
+    base_url = base_url
     not_visited = [base_url]
 
     while not_visited:
@@ -82,18 +82,46 @@ async def distribute_urls():
         except requests.exceptions.RequestException as e:
             print(f"Error visiting {current_url}: {e}")
         
-        await asyncio.sleep(0)  # Yield to other tasks
+        try:
+            await asyncio.sleep(0) 
+        except asyncio.CancelledError:
+            print("distribute_urls task cancelled")
+            # Add any necessary cleanup (e.g., closing RabbitMQ connection)
+            channel.close() 
+            connection.close()
+            break  # Exit the loop since the task is cancelled
 
 # Main function
 async def main():
+    parser = argparse.ArgumentParser(description='Web scraper for emails and URLs.')
+    parser.add_argument('base_url', type=str, help='The base URL to start scraping from')
+    parser.add_argument('duration', type=int, help='Duration (in seconds) for how long the scraper will run')
+    args = parser.parse_args()
+
     loop = asyncio.get_running_loop()
     
     # Create tasks for email consuming and URL distribution
     email_task = loop.create_task(consume_emails())
-    url_task = loop.create_task(distribute_urls())
-
-    # Run both tasks concurrently
-    await asyncio.gather(email_task, url_task)
+    url_task = loop.create_task(distribute_urls(args.base_url))
+    
+    # Run both tasks concurrently for the specified duration
+    await asyncio.gather(
+        asyncio.wait_for(email_task, timeout=args.duration),
+        asyncio.wait_for(url_task, timeout=args.duration)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
+    print("Completed")
+    print(f"Url count: {len(visited)}")
+    print(f"Email count: {len(scraped_emails)}")
+    # Write the counts and contents to a txt file
+    with open('scraper_output.txt', 'w') as fp:
+        fp.write(f"Url count: {len(visited)}\n")
+        fp.write(f"Email count: {len(scraped_emails)}\n")
+        fp.write("\nVisited URLs:\n")
+        for url in visited:
+            fp.write(f"{url}\n")
+        fp.write("\nScraped Emails:\n")
+        for email in scraped_emails:
+            fp.write(f"{email}\n")
